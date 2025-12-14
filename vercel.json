@@ -1,13 +1,13 @@
 {
-  "build": {
-    "env": {
-      "PLAYWRIGHT_BROWSERS_PATH": "0"
-    },
-    "installCommand": "pip install -r requirements.txt && python -m playwright install chromium"
-  },
   "functions": {
     "api/index.py": {
       "runtime": "@vercel/python"
+    }
+  },
+  "installCommand": "pip install -r requirements.txt && python -m playwright install chromium",
+  "build": {
+    "env": {
+      "PLAYWRIGHT_BROWSERS_PATH": "0"
     }
   },
   "routes": [
