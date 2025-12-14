@@ -86,7 +86,8 @@ def scrape_embed_url(tmdb_id, tag):
 
 # --- Flask Web Endpoint ---
 
-@app.route('/', methods=['GET']) 
+@app.route('/', methods=['GET'])
+@app.route('/api', methods=['GET'])
 def scrape_endpoint():
     """
     API endpoint that accepts a TMDb ID and executes the concurrent scraping of embed pages.
