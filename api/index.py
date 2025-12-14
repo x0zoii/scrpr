@@ -4,10 +4,12 @@ import os
 
 from flask import Flask, request, jsonify
 
-# IMPORTANT: We use playwright_aws_lambda to get the path
+# IMPORTANT: We use playwright_python_serverless for the compatible binary path
 from playwright.async_api import async_playwright
-# The lambda package provides the necessary path for the executable
-import playwright_aws_lambda
+import playwright_python_serverless
+
+# Remove the manual LD_LIBRARY_PATH setting as the new package handles it internally
+# os.environ['LD_LIBRARY_PATH'] = os.path.join(os.getcwd(), '.playwright', 'chromium') + ':' + os.environ.get('LD_LIBRARY_PATH', '')
 
 app = Flask(__name__)
 
@@ -19,10 +21,11 @@ TAGS = [
 ]
 
 def generate_embed_url(tmdb_id, tag):
+    # This is where you will add your actual URL generation logic later
     return f"https://example.com/embed/{tag}/{tmdb_id}" 
 
-# --- Core Async Scraper Function (Modified for Lambda Binary) ---
-# This function will now accept the browser instance from the handler.
+# --- Core Async Scraper Function (Optimized for single browser reuse) ---
+# This function accepts the shared browser instance.
 async def scrape_embed_url_async(browser, tmdb_id, tag):
     result = {'tag': tag, 'status': 'not_found', 'urls': []}
     
@@ -41,8 +44,9 @@ async def scrape_embed_url_async(browser, tmdb_id, tag):
 
         page.on("request", handle_request)
 
+        # Navigate and wait for the page to load or a timeout
         await page.goto(embed_url, wait_until="networkidle", timeout=15000)
-        await asyncio.sleep(5)
+        await asyncio.sleep(5) # Give the player time to load resources
 
         if found_urls:
             result['status'] = 'success'
@@ -56,31 +60,34 @@ async def scrape_embed_url_async(browser, tmdb_id, tag):
         
     return result
 
-# --- Asynchronous Handler Function ---
+# --- Asynchronous Handler Function (Launches browser once) ---
 async def async_handler(tmdb_id):
     playwright_instance = await async_playwright().start()
     browser = None
     try:
-        # --- CRITICAL CHANGE: Use the Lambda-compatible executable path ---
+        # CRITICAL: Launch the browser using the Lambda-compatible binary and args
         browser = await playwright_instance.chromium.launch(
-            executable_path=playwright_aws_lambda.get_browser_executable_path(), # Gets the correct pre-compiled path
+            executable_path=playwright_python_serverless.get_executable_path(), # Gets the correct pre-compiled path
             headless=True,
-            args=playwright_aws_lambda.chromium_args # Uses the minimal required args for Lambda
+            args=playwright_python_serverless.get_chromium_args() # Uses the minimal required args for Lambda
         )
         
+        # Create the tasks, passing the shared browser instance
         tasks = [
             scrape_embed_url_async(browser, tmdb_id, tag)
             for tag in TAGS
         ]
 
+        # Run all tasks concurrently in a single event loop
         return await asyncio.gather(*tasks)
     
     finally:
+        # Ensure the browser and Playwright instance are closed cleanly
         if browser:
             await browser.close()
         await playwright_instance.stop()
 
-# --- Flask Endpoint (Unchanged) ---
+# --- Flask Endpoint ---
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 @app.route('/api', defaults={'path': ''})
@@ -89,9 +96,11 @@ def handler(path):
     tmdb_id = request.args.get('id')
     
     if not tmdb_id:
+        # This will be returned for requests hitting the root path
         return "<h1>TMDB Scraper is running.</h1><p>Please use /api?id=[TMDB_ID_HERE] to start scraping.</p>"
 
     try:
+        # Execute the entire concurrent process
         raw_results = asyncio.run(async_handler(tmdb_id))
         
         results = {}
@@ -116,6 +125,7 @@ def handler(path):
         return jsonify(response_data)
 
     except Exception as e:
+        # Handle general errors gracefully
         return jsonify({
             'error': 'An internal server error occurred during scraping.',
             'details': str(e)
