@@ -1,21 +1,18 @@
-import os
 import asyncio
 import json
+import os
 
 from flask import Flask, request, jsonify
-# We import the classes directly to launch and close manually
-from playwright.async_api import ChromiumBrowser, async_playwright 
 
-# --- Vercel/Playwright Final Environment Fix ---
-# Keep the most robust LD_LIBRARY_PATH fix
-os.environ['LD_LIBRARY_PATH'] = os.path.join(os.getcwd(), '.playwright', 'chromium') + ':' + os.environ.get('LD_LIBRARY_PATH', '')
-# --- END Fix ---
+# IMPORTANT: We use playwright_aws_lambda to get the path
+from playwright.async_api import async_playwright
+# The lambda package provides the necessary path for the executable
+import playwright_aws_lambda
 
 app = Flask(__name__)
 
 # --- Configuration for Scraping ---
 TAGS = [
-    # Define your server tags and URLs here
     '[ALPHA]', '[BRAVO]', '[CHARLIE]', '[DELTA]', 
     '[ECHO]', '[FOXTROT]', '[GOLF]', '[HOTEL]', 
     '[INDIA]', '[JULIET]', '[KILO]', '[LIMA]', '[MIKE]'
@@ -24,15 +21,15 @@ TAGS = [
 def generate_embed_url(tmdb_id, tag):
     return f"https://example.com/embed/{tag}/{tmdb_id}" 
 
-# --- Core Async Scraper Function (Simplified Launch) ---
+# --- Core Async Scraper Function (Modified for Lambda Binary) ---
 # This function will now accept the browser instance from the handler.
-async def scrape_embed_url_async(browser: ChromiumBrowser, tmdb_id, tag):
+async def scrape_embed_url_async(browser, tmdb_id, tag):
     result = {'tag': tag, 'status': 'not_found', 'urls': []}
     
     embed_url = generate_embed_url(tmdb_id, tag)
     
     try:
-        # Use a new context and page for isolation, but reuse the same browser
+        # Use a new context and page for isolation, reusing the main browser
         context = await browser.new_context()
         page = await context.new_page()
 
@@ -51,7 +48,6 @@ async def scrape_embed_url_async(browser: ChromiumBrowser, tmdb_id, tag):
             result['status'] = 'success'
             result['urls'] = list(found_urls)
         
-        # Cleanup the context/page, but keep the main browser open
         await context.close()
 
     except Exception as e:
@@ -65,28 +61,26 @@ async def async_handler(tmdb_id):
     playwright_instance = await async_playwright().start()
     browser = None
     try:
-        # 1. Launch the browser ONCE for the entire function execution
+        # --- CRITICAL CHANGE: Use the Lambda-compatible executable path ---
         browser = await playwright_instance.chromium.launch(
+            executable_path=playwright_aws_lambda.get_browser_executable_path(), # Gets the correct pre-compiled path
             headless=True,
-            args=['--no-sandbox', '--disable-setuid-sandbox', '--single-process']
+            args=playwright_aws_lambda.chromium_args # Uses the minimal required args for Lambda
         )
         
-        # 2. Create the tasks, passing the shared browser instance
         tasks = [
             scrape_embed_url_async(browser, tmdb_id, tag)
             for tag in TAGS
         ]
 
-        # 3. Run all tasks concurrently
         return await asyncio.gather(*tasks)
     
     finally:
-        # 4. Ensure the browser and Playwright instance are closed cleanly
         if browser:
             await browser.close()
         await playwright_instance.stop()
 
-# --- Flask Endpoint (MODIFIED) ---
+# --- Flask Endpoint (Unchanged) ---
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 @app.route('/api', defaults={'path': ''})
@@ -95,14 +89,11 @@ def handler(path):
     tmdb_id = request.args.get('id')
     
     if not tmdb_id:
-        # This will now correctly return the base HTML due to vercel.json routes
         return "<h1>TMDB Scraper is running.</h1><p>Please use /api?id=[TMDB_ID_HERE] to start scraping.</p>"
 
     try:
-        # Execute the entire concurrent process
         raw_results = asyncio.run(async_handler(tmdb_id))
         
-        # ... (result aggregation remains the same) ...
         results = {}
         total_urls_found = 0
         
@@ -125,7 +116,6 @@ def handler(path):
         return jsonify(response_data)
 
     except Exception as e:
-        # Handle general errors gracefully
         return jsonify({
             'error': 'An internal server error occurred during scraping.',
             'details': str(e)
