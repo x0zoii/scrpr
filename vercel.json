@@ -19,5 +19,6 @@
       "src": "/api", 
       "dest": "/api" 
     }
-  ]
+  ],
+  "installCommand": "pip install -r requirements.txt && python -c \"import asyncio; import pyppeteer_chromium_resolver as pcr; asyncio.run(pcr.install(chromium_args=['--no-sandbox', '--disable-gpu']))\""
 }
