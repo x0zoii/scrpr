@@ -1,17 +1,21 @@
 import asyncio
 import json
 import os
+import sys
 
 from flask import Flask, request, jsonify
-
-# IMPORTANT: We use playwright_python_serverless for the compatible binary path
 from playwright.async_api import async_playwright
-import playwright_python_serverless
-
-# Remove the manual LD_LIBRARY_PATH setting as the new package handles it internally
-# os.environ['LD_LIBRARY_PATH'] = os.path.join(os.getcwd(), '.playwright', 'chromium') + ':' + os.environ.get('LD_LIBRARY_PATH', '')
+# No need to import the serverless package anymore
 
 app = Flask(__name__)
+
+# --- CRITICAL: Set the executable path to where the resolver downloaded Chromium ---
+# The pyppeteer_chromium_resolver tool places the executable in this known path.
+CHROMIUM_EXECUTABLE_PATH = os.path.join(os.path.expanduser('~'), '.local', 'share', 'pyppeteer-chromium-resolver', 'local-chromium', '1108766', 'chrome-linux', 'chrome')
+
+# Fallback: If the path is not found, use a common Lambda path (less likely to work)
+if not os.path.exists(CHROMIUM_EXECUTABLE_PATH):
+    CHROMIUM_EXECUTABLE_PATH = '/opt/bin/chromium' 
 
 # --- Configuration for Scraping ---
 TAGS = [
@@ -21,11 +25,9 @@ TAGS = [
 ]
 
 def generate_embed_url(tmdb_id, tag):
-    # This is where you will add your actual URL generation logic later
     return f"https://example.com/embed/{tag}/{tmdb_id}" 
 
-# --- Core Async Scraper Function (Optimized for single browser reuse) ---
-# This function accepts the shared browser instance.
+# --- Core Async Scraper Function (Modified to use specific executable path) ---
 async def scrape_embed_url_async(browser, tmdb_id, tag):
     result = {'tag': tag, 'status': 'not_found', 'urls': []}
     
@@ -44,9 +46,8 @@ async def scrape_embed_url_async(browser, tmdb_id, tag):
 
         page.on("request", handle_request)
 
-        # Navigate and wait for the page to load or a timeout
         await page.goto(embed_url, wait_until="networkidle", timeout=15000)
-        await asyncio.sleep(5) # Give the player time to load resources
+        await asyncio.sleep(5)
 
         if found_urls:
             result['status'] = 'success'
@@ -65,24 +66,22 @@ async def async_handler(tmdb_id):
     playwright_instance = await async_playwright().start()
     browser = None
     try:
-        # CRITICAL: Launch the browser using the Lambda-compatible binary and args
+        # CRITICAL: Launch the browser using the explicitly downloaded executable path
         browser = await playwright_instance.chromium.launch(
-            executable_path=playwright_python_serverless.get_executable_path(), # Gets the correct pre-compiled path
+            executable_path=CHROMIUM_EXECUTABLE_PATH, 
             headless=True,
-            args=playwright_python_serverless.get_chromium_args() # Uses the minimal required args for Lambda
+            # Use standard args required for Lambda
+            args=['--no-sandbox', '--disable-setuid-sandbox', '--single-process']
         )
         
-        # Create the tasks, passing the shared browser instance
         tasks = [
             scrape_embed_url_async(browser, tmdb_id, tag)
             for tag in TAGS
         ]
 
-        # Run all tasks concurrently in a single event loop
         return await asyncio.gather(*tasks)
     
     finally:
-        # Ensure the browser and Playwright instance are closed cleanly
         if browser:
             await browser.close()
         await playwright_instance.stop()
@@ -96,11 +95,9 @@ def handler(path):
     tmdb_id = request.args.get('id')
     
     if not tmdb_id:
-        # This will be returned for requests hitting the root path
         return "<h1>TMDB Scraper is running.</h1><p>Please use /api?id=[TMDB_ID_HERE] to start scraping.</p>"
 
     try:
-        # Execute the entire concurrent process
         raw_results = asyncio.run(async_handler(tmdb_id))
         
         results = {}
@@ -125,7 +122,6 @@ def handler(path):
         return jsonify(response_data)
 
     except Exception as e:
-        # Handle general errors gracefully
         return jsonify({
             'error': 'An internal server error occurred during scraping.',
             'details': str(e)
