@@ -1,0 +1,15 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+# Add all Python packages your scraper needs here:
+flask = "*"
+playwright = "*"
+# Add any other packages (e.g., requests, beautifulsoup4, pandas) below:
+
+
+[requires]
+# Forces the latest stable Python version on Vercel
+python_version = "3.12"
