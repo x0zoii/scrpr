@@ -1,17 +1,46 @@
 import asyncio
 import json
 import os
-import sys
+import glob # Used to find the dynamically named Chromium folder
 
 from flask import Flask, request, jsonify
 from playwright.async_api import async_playwright
 
-# --- CRITICAL ENVIRONMENT FIX FOR /tmp INSTALL ---
-# Set the LD_LIBRARY_PATH to include the Playwright binaries in the /tmp folder
-# This ensures Chromium can find the required system libraries installed in the same place.
-PLAYWRIGHT_INSTALL_PATH = '/tmp/pw/chromium' 
-os.environ['LD_LIBRARY_PATH'] = PLAYWRIGHT_INSTALL_PATH + ':' + os.environ.get('LD_LIBRARY_PATH', '')
-# --- END Fix ---
+# --- CRITICAL ENVIRONMENT SETUP ---
+# Playwright is instructed via vercel.json to install binaries to /tmp/pw.
+# We must find the exact executable path within that dynamic folder structure.
+def get_chromium_executable_path():
+    """
+    Dynamically finds the Chromium executable path within the Vercel /tmp/pw directory.
+    
+    The structure is usually: /tmp/pw/chromium-[version]/chrome-linux/chrome
+    """
+    
+    # 1. Look inside the known install path defined by PLAYWRIGHT_BROWSERS_PATH
+    install_root = os.environ.get('PLAYWRIGHT_BROWSERS_PATH', '/tmp/pw')
+    
+    # 2. Use glob to search for any folder matching 'chromium*'
+    # The pattern finds the executable regardless of the Playwright version number.
+    paths = glob.glob(os.path.join(install_root, 'chromium*', 'chrome-linux', 'chrome'))
+    
+    if paths:
+        # Return the first matching path found
+        return paths[0]
+    
+    # Fallback to None, which lets Playwright use its default auto-discovery 
+    # (though this is what caused the original error, we must have a path)
+    return None
+
+CHROMIUM_EXECUTABLE_PATH = get_chromium_executable_path()
+
+# This is a critical LD_LIBRARY_PATH fix to help Chromium find its dependent libraries
+# This path is usually one level above the executable path.
+if CHROMIUM_EXECUTABLE_PATH:
+    # Example: if executable is /tmp/pw/chromium-X/chrome-linux/chrome, 
+    # we need /tmp/pw/chromium-X/chrome-linux
+    library_path = os.path.dirname(CHROMIUM_EXECUTABLE_PATH)
+    os.environ['LD_LIBRARY_PATH'] = library_path + ':' + os.environ.get('LD_LIBRARY_PATH', '')
+
 
 app = Flask(__name__)
 
@@ -62,11 +91,21 @@ async def scrape_embed_url_async(browser, tmdb_id, tag):
 async def async_handler(tmdb_id):
     playwright_instance = await async_playwright().start()
     browser = None
+    
+    if not CHROMIUM_EXECUTABLE_PATH:
+        # If we failed to find the executable, raise a clear error to the logs
+        raise EnvironmentError(
+            "CRITICAL: Chromium executable path could not be resolved in the /tmp/pw directory. "
+            "The Playwright install step may have failed or the path structure changed."
+        )
+
     try:
-        # Launching Playwright. It should automatically use the /tmp/pw path
-        # due to the PLAYWRIGHT_BROWSERS_PATH environment variable.
+        # CRITICAL: Use the dynamically found executable path
+        # This is the last and best chance to fix the FUNCTION_INVOCATION_FAILED crash.
         browser = await playwright_instance.chromium.launch(
+            executable_path=CHROMIUM_EXECUTABLE_PATH,
             headless=True,
+            # These arguments are essential for Lambda/Vercel environments
             args=['--no-sandbox', '--disable-setuid-sandbox', '--single-process']
         )
         
@@ -118,6 +157,7 @@ def handler(path):
         return jsonify(response_data)
 
     except Exception as e:
+        # This catches both the low-level crash and the custom EnvironmentError
         return jsonify({
             'error': 'An internal server error occurred during scraping.',
             'details': str(e)
