@@ -1,2 +1,2 @@
 Flask
-playwright-aws-lambda
+playwright-python-serverless
