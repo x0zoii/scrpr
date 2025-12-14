@@ -5,19 +5,18 @@ import sys
 import json
 
 # --- Flask App Initialization ---
-app = Flask(__name__)
+app = Flask(__name__) 
 
 # --- Configuration for Direct API Calls ---
 
-# 1. MOCKUP API BASE URL: This is the critical part that may need adjustment
-# based on your network inspection. It's the endpoint that returns stream data.
+# 1. API BASE URL: This is the endpoint that the web player uses to request the stream source.
 API_BASE_URL = "https://player.vidify.top/api/source" 
 
-# 2. Server Names: We only need the short server name for the API call
+# 2. Server Names: Mapped from your SERVER_TEMPLATES (using the 'server=name' parameter)
 SERVER_API_NAMES = {
     "[ALPHA]": "adam",
     "[BRAVO]": "alok",
-    "[CHARLIE]": "box", # The server name from the URL template was 'box'
+    "[CHARLIE]": "box",
     "[DELTA]": "cypher",
     "[ECHO]": "haxo",
     "[FOXTROT]": "lux",
@@ -30,6 +29,24 @@ SERVER_API_NAMES = {
     "[MIKE]": "yoru",
 }
 
+# 3. FULL EMBED URL TEMPLATES (NEW): Used to set the correct Referer header
+SERVER_TEMPLATES = {
+    "[ALPHA]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=adam",
+    "[BRAVO]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=alok",
+    "[CHARLIE]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=box",
+    "[DELTA]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=cypher",
+    "[ECHO]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=haxo",
+    "[FOXTROT]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=lux",
+    "[GOLF]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=mbox",
+    "[HOTEL]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=meta",
+    "[INDIA]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=nitro",
+    "[JULIET]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=prime",
+    "[KILO]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=veasy",
+    "[LIMA]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=vplus",
+    "[MIKE]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=yoru",
+}
+
+
 # --- Fast Scraper Function (Synchronous, uses requests) ---
 
 def get_m3u8_url_fast(tmdb_id, tag, server_name):
@@ -37,56 +54,57 @@ def get_m3u8_url_fast(tmdb_id, tag, server_name):
     Attempts to fetch the M3U8 URL from a direct API call for a single server.
     """
     
-    # MOCKUP: Construct the API request URL (adjust query parameters as needed)
-    # The API might be expecting the TMDb ID and the server name.
+    # Construct the API request URL
     api_url = f"{API_BASE_URL}?id={tmdb_id}&server={server_name}"
     
-    # Define headers to emulate a browser request and satisfy security checks
+    # Construct the DYNAMIC Referer URL from the template
+    referer_url = SERVER_TEMPLATES[tag].format(id=tmdb_id)
+    
+    # Define ENHANCED headers
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        # Crucial: Pretend to be coming from the main player domain
-        "Referer": "https://player.vidify.top/", 
-        "X-Requested-With": "XMLHttpRequest" # Often required for API endpoints
+        # Standard User-Agent for a modern Chrome browser
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        
+        # CRUCIAL FIX: Use the full embed URL as the Referer
+        "Referer": referer_url, 
+        
+        # Explicitly request and accept JSON
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Encoding": "gzip, deflate, br", 
+        "Origin": "https://player.vidify.top", 
+        "X-Requested-With": "XMLHttpRequest" 
     }
     
     found_urls = set()
     
     try:
-        # Use a short timeout since this is a fast API call
         response = requests.get(api_url, headers=headers, timeout=10) 
-        response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+        response.raise_for_status() 
         
         # --- Extract the M3U8 URL from the JSON Response ---
+        data = response.json() 
         
-        # MOCKUP: Assuming the JSON response is structured like a video player source array
-        data = response.json()
-        
-        # The API is assumed to return a JSON array under the key 'sources'
         if data.get('success') and data.get('sources'):
             for source in data['sources']:
-                # The final M3U8 link is often stored under the key 'file'
                 if source.get('file') and '.m3u8' in source['file']:
                     found_urls.add(source['file'])
             
             if found_urls:
                 return {"tag": tag, "status": "success", "urls": sorted(list(found_urls))}
         
-        # If the API succeeds but finds no M3U8 link in the response data
         return {"tag": tag, "status": "not_found", "message": "API succeeded, but no M3U8 source found in response."}
         
     except requests.exceptions.RequestException as e:
-        # Catch network/connection errors
-        return {"tag": tag, "status": "error", "message": f"Request Error: {str(e)}"}
+        return {"tag": tag, "status": "error", "message": f"Request Error: {type(e).__name__}: {str(e)}"}
     except json.JSONDecodeError:
-        # Catch non-JSON responses
-        return {"tag": tag, "status": "error", "message": "API response was not valid JSON."}
+        # Include the start of the response text to help debug blocked requests
+        return {"tag": tag, "status": "error", "message": f"API response was not valid JSON. Response Text Start: {response.text[:50]}"}
     except Exception as e:
-        # Catch any other unexpected errors
         return {"tag": tag, "status": "error", "message": f"Unexpected Error: {str(e)}"}
 
 # --- Flask Web Endpoint ---
 
-@app.route('/api/', methods=['GET']) 
+@app.route('/', methods=['GET']) 
 def scrape_endpoint():
     """
     API endpoint that accepts a TMDb ID and executes the concurrent fast scraping.
@@ -96,33 +114,17 @@ def scrape_endpoint():
     if not tmdb_id or not tmdb_id.isdigit():
         return jsonify({"error": "Invalid or missing 'id' parameter."}), 400
 
-    # 1. Prepare tasks for concurrency
-    tasks_to_run = []
-    
-    for tag, server_name in SERVER_API_NAMES.items():
-        # Prepare the arguments for the get_m3u8_url_fast function
-        tasks_to_run.append((tmdb_id, tag, server_name))
-        
-    # 2. Execute all tasks concurrently using ThreadPoolExecutor
     final_results = {}
     total_urls = 0
-    
-    # Use a thread pool size equal to the number of servers for maximum concurrency
     max_workers = len(SERVER_API_NAMES)
     
-    # 
-    
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Map the function and its arguments, and get the results as they complete
-        # executor.map is often cleaner than as_completed for simple iteration
         
-        # Create a list of futures to maintain the order of results
         futures = [
             executor.submit(get_m3u8_url_fast, tmdb_id, tag, server_name)
             for tag, server_name in SERVER_API_NAMES.items()
         ]
 
-        # Process results as they complete
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
             tag = result['tag']
@@ -134,18 +136,9 @@ def scrape_endpoint():
             else:
                 final_results[tag] = result
     
-    # 3. Return the final JSON response
     return jsonify({
         "tmdb_id": tmdb_id,
         "total_servers_checked": len(SERVER_API_NAMES),
         "total_urls_found": total_urls,
         "results": final_results
     })
-
-# --- Entry Point ---
-
-if __name__ == '__main__':
-    # Run the Flask app
-    print("\nStarting Fast API web server...")
-    # This server is now highly efficient and ready for Vercel/Netlify deployment
-    app.run(host='0.0.0.0', port=8080)
