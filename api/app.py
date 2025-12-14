@@ -53,10 +53,9 @@ async def scrape_embed_url_async(tmdb_id, tag):
         async with async_playwright() as p:
             # Launch the browser with necessary serverless arguments
             browser = await p.chromium.launch(
-                executable_path=CHROMIUM_EXECUTABLE_PATH,
-                headless=True,
-                args=['--no-sandbox', '--disable-setuid-sandbox', '--single-process']
-            )
+        headless=True,
+        args=['--no-sandbox', '--disable-setuid-sandbox', '--single-process']
+    )
             page = await browser.new_page()
 
             # --- Network Request Monitoring ---
