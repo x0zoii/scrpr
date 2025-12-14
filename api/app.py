@@ -86,7 +86,7 @@ def get_m3u8_url_fast(tmdb_id, tag, server_name):
 
 # --- Flask Web Endpoint ---
 
-@app.route('/', methods=['GET']) 
+@app.route('/api/', methods=['GET']) 
 def scrape_endpoint():
     """
     API endpoint that accepts a TMDb ID and executes the concurrent fast scraping.
