@@ -1,16 +1,15 @@
 import concurrent.futures
-import requests
-from flask import Flask, request, jsonify
-import sys
 import json
-import re # We need the regex module to search the response text
+import re
+import asyncio
+from flask import Flask, request, jsonify
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 # --- Flask App Initialization ---
-app = Flask(__name__) 
+app = Flask(__name__)
 
 # --- Configuration: Full Embed URL Templates ---
-
-# These are now the PRIMARY URLs we will request (not just Referers).
+# (Kept the same for consistency)
 SERVER_TEMPLATES = {
     "[ALPHA]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=adam",
     "[BRAVO]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=alok",
@@ -27,64 +26,74 @@ SERVER_TEMPLATES = {
     "[MIKE]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=yoru",
 }
 
-# Regex pattern to find .m3u8 links in the HTML or JavaScript source code
-# This is a generic pattern that looks for any URL ending in .m3u8
+# Regex pattern for cleaning the URLs, if needed (Playwright provides the full URL)
 M3U8_PATTERN = re.compile(r'(https?:\/\/[^\s]*?\.m3u8[^\s\'"]*)')
 
+# --- Scraper Function (ASYNC, uses Playwright) ---
 
-# --- Scraper Function (Synchronous, uses requests) ---
-
-def scrape_embed_url(tmdb_id, tag):
+# Note: Playwright uses async/await, so the function must be async
+async def scrape_embed_url_async(tmdb_id, tag):
     """
-    Fetches the full embed URL and searches the response body (HTML/JS) 
-    for the M3U8 link using regex.
+    Launches a headless browser, navigates to the embed URL, and monitors
+    network requests for any URL containing '.m3u8'.
     """
     
-    # Construct the FULL embed URL
     embed_url = SERVER_TEMPLATES[tag].format(id=tmdb_id)
-    
-    # Define basic browser headers (Referer is now handled implicitly by requests following redirects)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "DNT": "1" # Do Not Track header
-    }
-    
     found_urls = set()
     
+    # We use a browser session within this function.
+    # The 'p' object is the Playwright instance, 'browser' is the Chrome instance.
     try:
-        # We must use ALLOW_REDIRECTS=True to follow the chain of redirects that 
-        # often occur when loading an embed URL (e.g., security checks, CDN hops).
-        response = requests.get(embed_url, headers=headers, timeout=15, allow_redirects=True) 
-        response.raise_for_status() 
-        
-        # --- Search the Final Response Text ---
-        # The M3U8 URL might be embedded directly in the HTML or in a linked JavaScript file.
-        # Since we cannot execute the JS, we rely on the link being visible in the source text.
-        
-        matches = M3U8_PATTERN.findall(response.text)
-        
-        if matches:
-            for url in matches:
-                # Basic cleanup, stripping quotes or trailing characters
-                url = url.strip('"\'') 
-                found_urls.add(url)
+        async with async_playwright() as p:
+            # Launch the browser (headless=True is the default)
+            browser = await p.chromium.launch()
+            page = await browser.new_page()
+
+            # --- Network Request Monitoring ---
+            # Set up a listener to capture network requests as they happen
+            def check_request(request):
+                url = request.url
+                # Filter for the manifest file
+                if ".m3u8" in url.lower() or ".mpd" in url.lower():
+                    # Check if the URL matches the general M3U8 pattern (optional, for safety)
+                    if M3U8_PATTERN.search(url):
+                        found_urls.add(url.strip())
+            
+            page.on("request", check_request)
+
+            # Navigate to the embed page and wait until all network activity subsides ('networkidle')
+            await page.goto(embed_url, wait_until="networkidle", timeout=20000)
+            
+            # Allow a brief moment for any final dynamic requests to finish
+            await page.wait_for_timeout(1000) 
+
+            # Close the browser
+            await browser.close()
             
             if found_urls:
                 return {"tag": tag, "status": "success", "urls": sorted(list(found_urls))}
-        
-        # If the page loads successfully but the link is not in the source code
-        return {"tag": tag, "status": "not_found", "message": "Embed page loaded, but no M3U8 link found in source code."}
-        
-    except requests.exceptions.RequestException as e:
-        # Catch network/connection errors
-        return {"tag": tag, "status": "error", "message": f"Request Error: {type(e).__name__}: {str(e)}"}
-    except Exception as e:
-        # Catch any other unexpected errors
-        return {"tag": tag, "status": "error", "message": f"Unexpected Error: {str(e)}"}
+            
+            # If no M3U8/MPD was found in the network traffic
+            return {"tag": tag, "status": "not_found", "message": "Embed page loaded, but no M3U8/MPD link found in network traffic."}
 
-# --- Flask Web Endpoint ---
+    except PlaywrightTimeoutError:
+        # Catch if the page takes too long to load
+        return {"tag": tag, "status": "error", "message": "Playwright Timeout: Page took too long to load or stabilize."}
+    except Exception as e:
+        # Catch any other unexpected Playwright errors
+        return {"tag": tag, "status": "error", "message": f"Playwright Error: {type(e).__name__}: {str(e)}"}
+
+
+# --- Helper Function to Run Async Code in ThreadPoolExecutor ---
+
+def run_async_scrape(tmdb_id, tag):
+    """A wrapper to run the async scraping function synchronously."""
+    # This is necessary because Flask's default environment is synchronous,
+    # but Playwright is fundamentally an asynchronous library.
+    return asyncio.run(scrape_embed_url_async(tmdb_id, tag))
+
+
+# --- Flask Web Endpoint (Modified to call the sync wrapper) ---
 
 @app.route('/', methods=['GET'])
 @app.route('/api', methods=['GET'])
@@ -101,12 +110,12 @@ def scrape_endpoint():
     total_urls = 0
     max_workers = len(SERVER_TEMPLATES)
     
-    # Execution logic remains the same
+    # Execution logic remains the same, but calls the sync wrapper
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         
-        # We now use the scrape_embed_url function
+        # Call run_async_scrape which wraps the Playwright logic
         futures = [
-            executor.submit(scrape_embed_url, tmdb_id, tag)
+            executor.submit(run_async_scrape, tmdb_id, tag)
             for tag in SERVER_TEMPLATES.keys()
         ]
 
@@ -127,3 +136,8 @@ def scrape_endpoint():
         "total_urls_found": total_urls,
         "results": final_results
     })
+
+# --- Main block to run the Flask app ---
+if __name__ == '__main__':
+    # Flask app will run on port 5000 by default
+    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
