@@ -1,139 +1,137 @@
-import concurrent.futures
-import json
-import re
-import asyncio
 import os
-from flask import Flask, request, jsonify
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+import asyncio
+import json
+from concurrent.futures import ThreadPoolExecutor
 
-# --- Flask App Initialization ---
+from flask import Flask, request, jsonify, abort
+from playwright.async_api import async_playwright
+
 app = Flask(__name__)
+executor = ThreadPoolExecutor(max_workers=20)
 
-# --- Configuration: Full Embed URL Templates ---
-SERVER_TEMPLATES = {
-    "[ALPHA]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=adam",
-    "[BRAVO]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=alok",
-    "[CHARLIE]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=box",
-    "[DELTA]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=cypher",
-    "[ECHO]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=haxo",
-    "[FOXTROT]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=lux",
-    "[GOLF]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=mbox",
-    "[HOTEL]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=meta",
-    "[INDIA]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=nitro",
-    "[JULIET]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=prime",
-    "[KILO]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=veasy",
-    "[LIMA]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=vplus",
-    "[MIKE]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=yoru",
-}
+# --- Configuration for Scraping ---
+TAGS = [
+    # Define your server tags and URLs here
+    '[ALPHA]', '[BRAVO]', '[CHARLIE]', '[DELTA]', 
+    '[ECHO]', '[FOXTROT]', '[GOLF]', '[HOTEL]', 
+    '[INDIA]', '[JULIET]', '[KILO]', '[LIMA]', '[MIKE]'
+]
 
-# Regex pattern is mainly for network request filtering now
-M3U8_PATTERN = re.compile(r'(https?:\/\/[^\s]*?\.m3u8[^\s\'"]*)')
+def generate_embed_url(tmdb_id, tag):
+    # This function should contain your actual URL generation logic.
+    # Placeholder for demonstration:
+    return f"https://example.com/embed/{tag}/{tmdb_id}" 
 
-# --- Scraper Function (ASYNC, uses Playwright) ---
+# --- Core Async Scraper Function ---
 async def scrape_embed_url_async(tmdb_id, tag):
-    """
-    Launches a headless browser, navigates to the embed URL, and monitors
-    network requests for any URL containing '.m3u8' or '.mpd'.
-    """
+    result = {'tag': tag, 'status': 'not_found', 'urls': []}
     
-    embed_url = SERVER_TEMPLATES[tag].format(id=tmdb_id)
-    found_urls = set()
+    # 1. Determine the Executable Path
+    # The PLAYWRIGHT_BROWSERS_PATH=0 setting in vercel.json forces 
+    # installation to the local directory (relative to PWD).
+    # The path is typically: PWD/ms-playwright/chromium/chrome
     
-    # --- Playwright Configuration for Vercel/Lambda ---
-    # Attempt to find the Chromium executable installed by the vercel.json command.
-    # The default location is relative to the execution environment.
-    CHROMIUM_EXECUTABLE_PATH = os.path.join(
-        os.getcwd(), 'node_modules', 'playwright', '.local-browsers', 'chromium-115', 'chrome-linux', 'chrome'
+    executable = os.path.join(
+        os.getcwd(), 'ms-playwright', 'chromium', 'chrome'
     )
-    # Fallback/Safety Check - Playwright is good at finding it, but this explicitly guides it.
-    if not os.path.exists(CHROMIUM_EXECUTABLE_PATH):
-         CHROMIUM_EXECUTABLE_PATH = None
+    
+    # Simple check for immediate feedback if the path is still wrong
+    if not os.path.exists(executable):
+        result['status'] = 'error'
+        result['message'] = f"Playwright Executable not found at expected path: {executable}"
+        return result
+        
+    embed_url = generate_embed_url(tmdb_id, tag)
     
     try:
         async with async_playwright() as p:
-            # Launch the browser with necessary serverless arguments
+            # 2. Launch Browser with the specific executable path
             browser = await p.chromium.launch(
-        headless=True,
-        args=['--no-sandbox', '--disable-setuid-sandbox', '--single-process']
-    )
+                executable_path=executable, # <--- THIS IS THE FIX
+                headless=True,
+                # These args are CRITICAL for Vercel/Lambda environments
+                args=['--no-sandbox', '--disable-setuid-sandbox', '--single-process']
+            )
             page = await browser.new_page()
 
-            # --- Network Request Monitoring ---
-            def check_request(request):
-                url = request.url
-                # Filter for the manifest file (case-insensitive)
-                if ".m3u8" in url.lower() or ".mpd" in url.lower():
-                    if M3U8_PATTERN.search(url):
-                        found_urls.add(url.strip())
-            
-            page.on("request", check_request)
+            # Listen for network requests to find streaming links
+            found_urls = set()
+            def handle_request(request_obj):
+                url = request_obj.url
+                if '.m3u8' in url or '.mpd' in url:
+                    found_urls.add(url)
 
-            # Navigate to the embed page and wait for network stability
-            await page.goto(embed_url, wait_until="networkidle", timeout=30000)
-            
-            # Allow a brief moment for final dynamic requests to complete
-            await page.wait_for_timeout(2000) 
+            page.on("request", handle_request)
 
-            await browser.close()
-            
+            # Navigate and wait for the page to load or a timeout
+            await page.goto(embed_url, wait_until="networkidle", timeout=15000)
+
+            await asyncio.sleep(5) # Give the player time to load resources
+
             if found_urls:
-                return {"tag": tag, "status": "success", "urls": sorted(list(found_urls))}
+                result['status'] = 'success'
+                result['urls'] = list(found_urls)
             
-            return {"tag": tag, "status": "not_found", "message": "Embed page loaded, but no M3U8/MPD link found in network traffic."}
+            await browser.close()
 
-    except PlaywrightTimeoutError:
-        return {"tag": tag, "status": "error", "message": "Playwright Timeout: Page took too long to load or stabilize."}
     except Exception as e:
-        return {"tag": tag, "status": "error", "message": f"Playwright Error on {tag}: {type(e).__name__}: {str(e)}"}
+        result['status'] = 'error'
+        result['message'] = f"Playwright Error on {tag}: {e}"
+        
+    return result
 
-# --- Helper Function to Run Async Code in ThreadPoolExecutor ---
+# --- Synchronous Wrapper for Flask ---
 def run_async_scrape(tmdb_id, tag):
-    """A wrapper to run the async scraping function synchronously."""
-    # asyncio.run() runs the async function and manages the event loop
     return asyncio.run(scrape_embed_url_async(tmdb_id, tag))
 
-
-# --- Flask Web Endpoint ---
-@app.route('/', methods=['GET'])
-@app.route('/api', methods=['GET'])
-def scrape_endpoint():
-    """
-    API endpoint that accepts a TMDb ID and executes the concurrent scraping of embed pages.
-    """
+# --- Flask Endpoint ---
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+@app.route('/api', defaults={'path': ''})
+@app.route('/api/<path:path>')
+def handler(path):
     tmdb_id = request.args.get('id')
     
-    if not tmdb_id or not tmdb_id.isdigit():
-        return jsonify({"error": "Invalid or missing 'id' parameter."}), 400
+    if not tmdb_id:
+        # Simple HTML response for base URL testing
+        return "<h1>TMDB Scraper is running.</h1><p>Please use /?id=[TMDB_ID_HERE] to start scraping.</p>"
 
-    final_results = {}
-    total_urls = 0
-    max_workers = len(SERVER_TEMPLATES)
-    
-    # Use ThreadPoolExecutor to run multiple synchronous wrappers concurrently
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        
+    try:
+        # Use ThreadPoolExecutor to run the concurrent scrape tasks
         futures = [
             executor.submit(run_async_scrape, tmdb_id, tag)
-            for tag in SERVER_TEMPLATES.keys()
+            for tag in TAGS
         ]
-
-        for future in concurrent.futures.as_completed(futures):
+        
+        results = {}
+        total_urls_found = 0
+        
+        for future in futures:
             result = future.result()
-            tag = result['tag']
-            
+            results[result['tag']] = {
+                'status': result['status'],
+                'message': result.get('message'),
+                'urls': result.get('urls', [])
+            }
             if result['status'] == 'success':
-                urls_list = result['urls']
-                final_results[tag] = {"status": "success", "urls": urls_list}
-                total_urls += len(urls_list)
-            else:
-                final_results[tag] = result
-    
-    return jsonify({
-        "tmdb_id": tmdb_id,
-        "total_servers_checked": len(SERVER_TEMPLATES),
-        "total_urls_found": total_urls,
-        "results": final_results
-    })
+                total_urls_found += len(result['urls'])
 
-# Note: The standard Flask run block is removed for Vercel deployment.
-# Vercel automatically detects and runs the 'app' object.
+        response_data = {
+            'tmdb_id': tmdb_id,
+            'total_servers_checked': len(TAGS),
+            'total_urls_found': total_urls_found,
+            'results': results
+        }
+        
+        return jsonify(response_data)
+
+    except Exception as e:
+        # Handle general errors gracefully
+        return jsonify({
+            'error': 'An internal server error occurred during scraping.',
+            'details': str(e)
+        }), 500
+
+if __name__ == '__main__':
+    # This block is for local testing only
+    app.run(debug=True)
