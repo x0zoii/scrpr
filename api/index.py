@@ -12,7 +12,7 @@ from playwright.async_api import async_playwright
 # preventing the 'FUNCTION_INVOCATION_FAILED' crash.
 # The path 'ms-playwright/chromium' is where Playwright installs the browser 
 # when PLAYWRIGHT_BROWSERS_PATH="0" is set in vercel.json.
-os.environ['LD_LIBRARY_PATH'] = os.path.join(os.getcwd(), 'ms-playwright', 'chromium') + ':' + os.environ.get('LD_LIBRARY_PATH', '')
+os.environ['LD_LIBRARY_PATH'] = os.path.join(os.getcwd(), '.playwright', 'chromium') + ':' + os.environ.get('LD_LIBRARY_PATH', '')
 # --- END Fix ---
 
 app = Flask(__name__)
