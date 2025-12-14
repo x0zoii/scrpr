@@ -1,7 +1,7 @@
 {
   "version": 2,
   "functions": {
-    "api/app.py": { 
+    "api/index.py": {
       "maxDuration": 60,
       "memory": 1024
     }
