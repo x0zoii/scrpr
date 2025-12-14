@@ -1,5 +1,5 @@
 {
   "version": 2,
-  "installCommand": "python -m pip install pipenv && pipenv install --deploy --system && python -m playwright install chromium",
+  "installCommand": "pip install -r requirements.txt && python -m playwright install chromium",
   "buildCommand": "echo Vercel build complete - Playwright installed"
 }
