@@ -1,11 +1,17 @@
 {
   "version": 2,
   "functions": {
-    "api/*.py": {
+    "api/index.py": {
       "maxDuration": 60,
       "memory": 1024
     }
   },
+  "builds": [
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python"
+    }
+  ],
   "env": {
     "PLAYWRIGHT_BROWSERS_PATH": "0" 
   },
