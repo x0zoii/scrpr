@@ -26,28 +26,14 @@ def generate_embed_url(tmdb_id, tag):
 async def scrape_embed_url_async(tmdb_id, tag):
     result = {'tag': tag, 'status': 'not_found', 'urls': []}
     
-    # 1. Determine the Executable Path
-    # The PLAYWRIGHT_BROWSERS_PATH=0 setting in vercel.json forces 
-    # installation to the local directory (relative to PWD).
-    # The path is typically: PWD/ms-playwright/chromium/chrome
-    
-    executable = os.path.join(
-        os.getcwd(), 'ms-playwright', 'chromium', 'chrome'
-    )
-    
-    # Simple check for immediate feedback if the path is still wrong
-    if not os.path.exists(executable):
-        result['status'] = 'error'
-        result['message'] = f"Playwright Executable not found at expected path: {executable}"
-        return result
-        
     embed_url = generate_embed_url(tmdb_id, tag)
     
     try:
         async with async_playwright() as p:
-            # 2. Launch Browser with the specific executable path
+            
+            # 1. Playwright will now automatically find the browser 
+            #    installed at the path specified by PLAYWRIGHT_BROWSERS_PATH=0 in vercel.json.
             browser = await p.chromium.launch(
-                executable_path=executable, # <--- THIS IS THE FIX
                 headless=True,
                 # These args are CRITICAL for Vercel/Lambda environments
                 args=['--no-sandbox', '--disable-setuid-sandbox', '--single-process']
@@ -82,6 +68,8 @@ async def scrape_embed_url_async(tmdb_id, tag):
 
 # --- Synchronous Wrapper for Flask ---
 def run_async_scrape(tmdb_id, tag):
+    # Note: Using asyncio.run inside ThreadPoolExecutor is acceptable for Vercel,
+    # but be aware of the performance cost of starting a new event loop per thread.
     return asyncio.run(scrape_embed_url_async(tmdb_id, tag))
 
 # --- Flask Endpoint ---
@@ -98,6 +86,7 @@ def handler(path):
 
     try:
         # Use ThreadPoolExecutor to run the concurrent scrape tasks
+        # This executes the 13 tags in parallel threads, each calling Playwright.
         futures = [
             executor.submit(run_async_scrape, tmdb_id, tag)
             for tag in TAGS
