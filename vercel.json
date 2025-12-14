@@ -9,5 +9,15 @@
         "memory": 1024
       }
     }
+  ],
+  "routes": [
+    { 
+      "src": "/", 
+      "dest": "/api" 
+    },
+    { 
+      "src": "/api", 
+      "dest": "/api" 
+    }
   ]
 }
