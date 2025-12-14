@@ -6,6 +6,15 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify, abort
 from playwright.async_api import async_playwright
 
+# --- Vercel/Playwright Environment Fix ---
+# This line is CRITICAL for Vercel/Lambda. It directs the system 
+# to the shared object libraries (.so files) installed with Chromium, 
+# preventing the 'FUNCTION_INVOCATION_FAILED' crash.
+# The path 'ms-playwright/chromium' is where Playwright installs the browser 
+# when PLAYWRIGHT_BROWSERS_PATH="0" is set in vercel.json.
+os.environ['LD_LIBRARY_PATH'] = os.path.join(os.getcwd(), 'ms-playwright', 'chromium') + ':' + os.environ.get('LD_LIBRARY_PATH', '')
+# --- END Fix ---
+
 app = Flask(__name__)
 executor = ThreadPoolExecutor(max_workers=20)
 
