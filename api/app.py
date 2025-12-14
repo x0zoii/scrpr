@@ -2,6 +2,7 @@ import concurrent.futures
 import json
 import re
 import asyncio
+import os
 from flask import Flask, request, jsonify
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -9,7 +10,6 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 app = Flask(__name__)
 
 # --- Configuration: Full Embed URL Templates ---
-# (Kept the same for consistency)
 SERVER_TEMPLATES = {
     "[ALPHA]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=adam",
     "[BRAVO]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=alok",
@@ -26,75 +26,75 @@ SERVER_TEMPLATES = {
     "[MIKE]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=yoru",
 }
 
-# Regex pattern for cleaning the URLs, if needed (Playwright provides the full URL)
+# Regex pattern is mainly for network request filtering now
 M3U8_PATTERN = re.compile(r'(https?:\/\/[^\s]*?\.m3u8[^\s\'"]*)')
 
 # --- Scraper Function (ASYNC, uses Playwright) ---
-
-# Note: Playwright uses async/await, so the function must be async
 async def scrape_embed_url_async(tmdb_id, tag):
     """
     Launches a headless browser, navigates to the embed URL, and monitors
-    network requests for any URL containing '.m3u8'.
+    network requests for any URL containing '.m3u8' or '.mpd'.
     """
     
     embed_url = SERVER_TEMPLATES[tag].format(id=tmdb_id)
     found_urls = set()
     
-    # We use a browser session within this function.
-    # The 'p' object is the Playwright instance, 'browser' is the Chrome instance.
+    # --- Playwright Configuration for Vercel/Lambda ---
+    # Attempt to find the Chromium executable installed by the vercel.json command.
+    # The default location is relative to the execution environment.
+    CHROMIUM_EXECUTABLE_PATH = os.path.join(
+        os.getcwd(), 'node_modules', 'playwright', '.local-browsers', 'chromium-115', 'chrome-linux', 'chrome'
+    )
+    # Fallback/Safety Check - Playwright is good at finding it, but this explicitly guides it.
+    if not os.path.exists(CHROMIUM_EXECUTABLE_PATH):
+         CHROMIUM_EXECUTABLE_PATH = None
+    
     try:
         async with async_playwright() as p:
-            # Launch the browser (headless=True is the default)
-            browser = await p.chromium.launch()
+            # Launch the browser with necessary serverless arguments
+            browser = await p.chromium.launch(
+                executable_path=CHROMIUM_EXECUTABLE_PATH,
+                headless=True,
+                args=['--no-sandbox', '--disable-setuid-sandbox', '--single-process']
+            )
             page = await browser.new_page()
 
             # --- Network Request Monitoring ---
-            # Set up a listener to capture network requests as they happen
             def check_request(request):
                 url = request.url
-                # Filter for the manifest file
+                # Filter for the manifest file (case-insensitive)
                 if ".m3u8" in url.lower() or ".mpd" in url.lower():
-                    # Check if the URL matches the general M3U8 pattern (optional, for safety)
                     if M3U8_PATTERN.search(url):
                         found_urls.add(url.strip())
             
             page.on("request", check_request)
 
-            # Navigate to the embed page and wait until all network activity subsides ('networkidle')
-            await page.goto(embed_url, wait_until="networkidle", timeout=20000)
+            # Navigate to the embed page and wait for network stability
+            await page.goto(embed_url, wait_until="networkidle", timeout=30000)
             
-            # Allow a brief moment for any final dynamic requests to finish
-            await page.wait_for_timeout(1000) 
+            # Allow a brief moment for final dynamic requests to complete
+            await page.wait_for_timeout(2000) 
 
-            # Close the browser
             await browser.close()
             
             if found_urls:
                 return {"tag": tag, "status": "success", "urls": sorted(list(found_urls))}
             
-            # If no M3U8/MPD was found in the network traffic
             return {"tag": tag, "status": "not_found", "message": "Embed page loaded, but no M3U8/MPD link found in network traffic."}
 
     except PlaywrightTimeoutError:
-        # Catch if the page takes too long to load
         return {"tag": tag, "status": "error", "message": "Playwright Timeout: Page took too long to load or stabilize."}
     except Exception as e:
-        # Catch any other unexpected Playwright errors
-        return {"tag": tag, "status": "error", "message": f"Playwright Error: {type(e).__name__}: {str(e)}"}
-
+        return {"tag": tag, "status": "error", "message": f"Playwright Error on {tag}: {type(e).__name__}: {str(e)}"}
 
 # --- Helper Function to Run Async Code in ThreadPoolExecutor ---
-
 def run_async_scrape(tmdb_id, tag):
     """A wrapper to run the async scraping function synchronously."""
-    # This is necessary because Flask's default environment is synchronous,
-    # but Playwright is fundamentally an asynchronous library.
+    # asyncio.run() runs the async function and manages the event loop
     return asyncio.run(scrape_embed_url_async(tmdb_id, tag))
 
 
-# --- Flask Web Endpoint (Modified to call the sync wrapper) ---
-
+# --- Flask Web Endpoint ---
 @app.route('/', methods=['GET'])
 @app.route('/api', methods=['GET'])
 def scrape_endpoint():
@@ -110,10 +110,9 @@ def scrape_endpoint():
     total_urls = 0
     max_workers = len(SERVER_TEMPLATES)
     
-    # Execution logic remains the same, but calls the sync wrapper
+    # Use ThreadPoolExecutor to run multiple synchronous wrappers concurrently
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         
-        # Call run_async_scrape which wraps the Playwright logic
         futures = [
             executor.submit(run_async_scrape, tmdb_id, tag)
             for tag in SERVER_TEMPLATES.keys()
@@ -137,7 +136,5 @@ def scrape_endpoint():
         "results": final_results
     })
 
-# --- Main block to run the Flask app ---
-if __name__ == '__main__':
-    # Flask app will run on port 5000 by default
-    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
+# Note: The standard Flask run block is removed for Vercel deployment.
+# Vercel automatically detects and runs the 'app' object.
