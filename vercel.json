@@ -9,10 +9,5 @@
         "memory": 1024
       }
     }
-  ],
-  "env": {
-    "PLAYWRIGHT_BROWSERS_PATH": "0" 
-  },
-  "installCommand": "pip install -r requirements.txt && python -m playwright install --with-deps chromium",
-  "buildCommand": "echo Vercel build complete - Playwright installed"
+  ]
 }
