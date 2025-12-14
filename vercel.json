@@ -1,7 +1,7 @@
 {
   "version": 2,
   "functions": {
-    "api/**/*.py": {
+    "api/*.py": {  <--- THIS IS THE FIX
       "maxDuration": 60,
       "memory": 1024
     }
