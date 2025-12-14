@@ -1,19 +1,18 @@
 {
-  "version": 2,
   "builds": [
     {
       "src": "api/app.py",
-      "use": "@vercel/python"
+      "use": "@vercel/python",
+      "config": {
+        "runtime": "python3.11"
+      }
     }
   ],
   "routes": [
     {
-      "src": "/api",
-      "dest": "api/app.py"
-    },
-    {
-      "src": "/api/(.*)",
+      "src": "/(.*)",
       "dest": "api/app.py"
     }
-  ]
+  ],
+  "installCommand": "pip install -r requirements.txt --target /tmp/pip-packages && cp -R /tmp/pip-packages/* . && playwright install chromium"
 }
