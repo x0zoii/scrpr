@@ -1,3 +1,2 @@
 Flask
 playwright
-pyppeteer-chromium-resolver
