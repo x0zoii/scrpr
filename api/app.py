@@ -3,33 +3,14 @@ import requests
 from flask import Flask, request, jsonify
 import sys
 import json
+import re # We need the regex module to search the response text
 
 # --- Flask App Initialization ---
 app = Flask(__name__) 
 
-# --- Configuration for Direct API Calls ---
+# --- Configuration: Full Embed URL Templates ---
 
-# 1. API BASE URL: This is the endpoint that the web player uses to request the stream source.
-API_BASE_URL = "https://player.vidify.top/api/source" 
-
-# 2. Server Names: Mapped from your SERVER_TEMPLATES (using the 'server=name' parameter)
-SERVER_API_NAMES = {
-    "[ALPHA]": "adam",
-    "[BRAVO]": "alok",
-    "[CHARLIE]": "box",
-    "[DELTA]": "cypher",
-    "[ECHO]": "haxo",
-    "[FOXTROT]": "lux",
-    "[GOLF]": "mbox",
-    "[HOTEL]": "meta",
-    "[INDIA]": "nitro",
-    "[JULIET]": "prime",
-    "[KILO]": "veasy",
-    "[LIMA]": "vplus",
-    "[MIKE]": "yoru",
-}
-
-# 3. FULL EMBED URL TEMPLATES (NEW): Used to set the correct Referer header
+# These are now the PRIMARY URLs we will request (not just Referers).
 SERVER_TEMPLATES = {
     "[ALPHA]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=adam",
     "[BRAVO]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=alok",
@@ -46,60 +27,61 @@ SERVER_TEMPLATES = {
     "[MIKE]": "https://player.vidify.top/embed/movie/{id}?autoplay=false&poster=false&chromecast=false&servericon=false&setting=false&pip=false&font=Roboto&fontcolor=6f63ff&fontsize=20&opacity=0.5&primarycolor=3b82f6&secondarycolor=1f2937&iconcolor=ffffff&server=yoru",
 }
 
+# Regex pattern to find .m3u8 links in the HTML or JavaScript source code
+# This is a generic pattern that looks for any URL ending in .m3u8
+M3U8_PATTERN = re.compile(r'(https?:\/\/[^\s]*?\.m3u8[^\s\'"]*)')
 
-# --- Fast Scraper Function (Synchronous, uses requests) ---
 
-def get_m3u8_url_fast(tmdb_id, tag, server_name):
+# --- Scraper Function (Synchronous, uses requests) ---
+
+def scrape_embed_url(tmdb_id, tag):
     """
-    Attempts to fetch the M3U8 URL from a direct API call for a single server.
+    Fetches the full embed URL and searches the response body (HTML/JS) 
+    for the M3U8 link using regex.
     """
     
-    # Construct the API request URL
-    api_url = f"{API_BASE_URL}?id={tmdb_id}&server={server_name}"
+    # Construct the FULL embed URL
+    embed_url = SERVER_TEMPLATES[tag].format(id=tmdb_id)
     
-    # Construct the DYNAMIC Referer URL from the template
-    referer_url = SERVER_TEMPLATES[tag].format(id=tmdb_id)
-    
-    # Define ENHANCED headers
+    # Define basic browser headers (Referer is now handled implicitly by requests following redirects)
     headers = {
-        # Standard User-Agent for a modern Chrome browser
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        
-        # CRUCIAL FIX: Use the full embed URL as the Referer
-        "Referer": referer_url, 
-        
-        # Explicitly request and accept JSON
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Encoding": "gzip, deflate, br", 
-        "Origin": "https://player.vidify.top", 
-        "X-Requested-With": "XMLHttpRequest" 
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "DNT": "1" # Do Not Track header
     }
     
     found_urls = set()
     
     try:
-        response = requests.get(api_url, headers=headers, timeout=10) 
+        # We must use ALLOW_REDIRECTS=True to follow the chain of redirects that 
+        # often occur when loading an embed URL (e.g., security checks, CDN hops).
+        response = requests.get(embed_url, headers=headers, timeout=15, allow_redirects=True) 
         response.raise_for_status() 
         
-        # --- Extract the M3U8 URL from the JSON Response ---
-        data = response.json() 
+        # --- Search the Final Response Text ---
+        # The M3U8 URL might be embedded directly in the HTML or in a linked JavaScript file.
+        # Since we cannot execute the JS, we rely on the link being visible in the source text.
         
-        if data.get('success') and data.get('sources'):
-            for source in data['sources']:
-                if source.get('file') and '.m3u8' in source['file']:
-                    found_urls.add(source['file'])
+        matches = M3U8_PATTERN.findall(response.text)
+        
+        if matches:
+            for url in matches:
+                # Basic cleanup, stripping quotes or trailing characters
+                url = url.strip('"\'') 
+                found_urls.add(url)
             
             if found_urls:
                 return {"tag": tag, "status": "success", "urls": sorted(list(found_urls))}
         
-        return {"tag": tag, "status": "not_found", "message": "API succeeded, but no M3U8 source found in response."}
+        # If the page loads successfully but the link is not in the source code
+        return {"tag": tag, "status": "not_found", "message": "Embed page loaded, but no M3U8 link found in source code."}
         
     except requests.exceptions.RequestException as e:
+        # Catch network/connection errors
         return {"tag": tag, "status": "error", "message": f"Request Error: {type(e).__name__}: {str(e)}"}
-    except json.JSONDecodeError:
-        # Include the start of the response text to help debug blocked requests
-        return {"tag": tag, "status": "error", "message": f"API response was not valid JSON. Response Text Start: {response.text[:50]}"}
     except Exception as e:
+        # Catch any other unexpected errors
         return {"tag": tag, "status": "error", "message": f"Unexpected Error: {str(e)}"}
 
 # --- Flask Web Endpoint ---
@@ -107,7 +89,7 @@ def get_m3u8_url_fast(tmdb_id, tag, server_name):
 @app.route('/', methods=['GET']) 
 def scrape_endpoint():
     """
-    API endpoint that accepts a TMDb ID and executes the concurrent fast scraping.
+    API endpoint that accepts a TMDb ID and executes the concurrent scraping of embed pages.
     """
     tmdb_id = request.args.get('id')
     
@@ -116,13 +98,15 @@ def scrape_endpoint():
 
     final_results = {}
     total_urls = 0
-    max_workers = len(SERVER_API_NAMES)
+    max_workers = len(SERVER_TEMPLATES)
     
+    # Execution logic remains the same
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         
+        # We now use the scrape_embed_url function
         futures = [
-            executor.submit(get_m3u8_url_fast, tmdb_id, tag, server_name)
-            for tag, server_name in SERVER_API_NAMES.items()
+            executor.submit(scrape_embed_url, tmdb_id, tag)
+            for tag in SERVER_TEMPLATES.keys()
         ]
 
         for future in concurrent.futures.as_completed(futures):
@@ -138,7 +122,7 @@ def scrape_endpoint():
     
     return jsonify({
         "tmdb_id": tmdb_id,
-        "total_servers_checked": len(SERVER_API_NAMES),
+        "total_servers_checked": len(SERVER_TEMPLATES),
         "total_urls_found": total_urls,
         "results": final_results
     })
