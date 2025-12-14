@@ -1,18 +1,17 @@
 {
-  "builds": [
-    {
-      "src": "api/app.py",
-      "use": "@vercel/python",
-      "config": {
-        "runtime": "python3.11"
-      }
+  "build": {
+    "env": {
+      "PLAYWRIGHT_BROWSERS_PATH": "0"
+    },
+    "installCommand": "pip install -r requirements.txt && python -m playwright install chromium"
+  },
+  "functions": {
+    "api/index.py": {
+      "runtime": "@vercel/python"
     }
-  ],
+  },
   "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "api/app.py"
-    }
-  ],
-  "installCommand": "pip install -r requirements.txt --target /tmp/pip-packages && cp -R /tmp/pip-packages/* . && playwright install chromium"
+    {"src": "/api", "dest": "/api/app.py"},
+    {"src": "/(.*)", "dest": "/api/app.py"}
+  ]
 }
