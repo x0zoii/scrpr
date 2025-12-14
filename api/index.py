@@ -5,17 +5,15 @@ import sys
 
 from flask import Flask, request, jsonify
 from playwright.async_api import async_playwright
-# No need to import the serverless package anymore
+
+# --- CRITICAL ENVIRONMENT FIX FOR /tmp INSTALL ---
+# Set the LD_LIBRARY_PATH to include the Playwright binaries in the /tmp folder
+# This ensures Chromium can find the required system libraries installed in the same place.
+PLAYWRIGHT_INSTALL_PATH = '/tmp/pw/chromium' 
+os.environ['LD_LIBRARY_PATH'] = PLAYWRIGHT_INSTALL_PATH + ':' + os.environ.get('LD_LIBRARY_PATH', '')
+# --- END Fix ---
 
 app = Flask(__name__)
-
-# --- CRITICAL: Set the executable path to where the resolver downloaded Chromium ---
-# The pyppeteer_chromium_resolver tool places the executable in this known path.
-CHROMIUM_EXECUTABLE_PATH = os.path.join(os.path.expanduser('~'), '.local', 'share', 'pyppeteer-chromium-resolver', 'local-chromium', '1108766', 'chrome-linux', 'chrome')
-
-# Fallback: If the path is not found, use a common Lambda path (less likely to work)
-if not os.path.exists(CHROMIUM_EXECUTABLE_PATH):
-    CHROMIUM_EXECUTABLE_PATH = '/opt/bin/chromium' 
 
 # --- Configuration for Scraping ---
 TAGS = [
@@ -27,14 +25,13 @@ TAGS = [
 def generate_embed_url(tmdb_id, tag):
     return f"https://example.com/embed/{tag}/{tmdb_id}" 
 
-# --- Core Async Scraper Function (Modified to use specific executable path) ---
+# --- Core Async Scraper Function ---
 async def scrape_embed_url_async(browser, tmdb_id, tag):
     result = {'tag': tag, 'status': 'not_found', 'urls': []}
     
     embed_url = generate_embed_url(tmdb_id, tag)
     
     try:
-        # Use a new context and page for isolation, reusing the main browser
         context = await browser.new_context()
         page = await context.new_page()
 
@@ -66,11 +63,10 @@ async def async_handler(tmdb_id):
     playwright_instance = await async_playwright().start()
     browser = None
     try:
-        # CRITICAL: Launch the browser using the explicitly downloaded executable path
+        # Launching Playwright. It should automatically use the /tmp/pw path
+        # due to the PLAYWRIGHT_BROWSERS_PATH environment variable.
         browser = await playwright_instance.chromium.launch(
-            executable_path=CHROMIUM_EXECUTABLE_PATH, 
             headless=True,
-            # Use standard args required for Lambda
             args=['--no-sandbox', '--disable-setuid-sandbox', '--single-process']
         )
         
