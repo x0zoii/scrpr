@@ -3,15 +3,15 @@ import asyncio
 import json
 
 from flask import Flask, request, jsonify
-from playwright.async_api import async_playwright
+# We import the classes directly to launch and close manually
+from playwright.async_api import ChromiumBrowser, async_playwright 
 
 # --- Vercel/Playwright Final Environment Fix ---
-# We keep this line as a safeguard, pointing to the known Lambda-compatible path
+# Keep the most robust LD_LIBRARY_PATH fix
 os.environ['LD_LIBRARY_PATH'] = os.path.join(os.getcwd(), '.playwright', 'chromium') + ':' + os.environ.get('LD_LIBRARY_PATH', '')
 # --- END Fix ---
 
 app = Flask(__name__)
-# REMOVED: executor = ThreadPoolExecutor(max_workers=20)
 
 # --- Configuration for Scraping ---
 TAGS = [
@@ -22,42 +22,37 @@ TAGS = [
 ]
 
 def generate_embed_url(tmdb_id, tag):
-    # This function should contain your actual URL generation logic.
     return f"https://example.com/embed/{tag}/{tmdb_id}" 
 
-# --- Core Async Scraper Function (UNCHANGED) ---
-async def scrape_embed_url_async(tmdb_id, tag):
+# --- Core Async Scraper Function (Simplified Launch) ---
+# This function will now accept the browser instance from the handler.
+async def scrape_embed_url_async(browser: ChromiumBrowser, tmdb_id, tag):
     result = {'tag': tag, 'status': 'not_found', 'urls': []}
     
     embed_url = generate_embed_url(tmdb_id, tag)
     
     try:
-        # Use a single playwright instance launch for all concurrent tasks
-        async with async_playwright() as p:
-            # We are reverting to the simple launch, as the environment fixes should work
-            # If this fails, we can re-add executable_path=CHROMIUM_EXECUTABLE_PATH
-            browser = await p.chromium.launch(
-                headless=True,
-                args=['--no-sandbox', '--disable-setuid-sandbox', '--single-process']
-            )
-            page = await browser.new_page()
+        # Use a new context and page for isolation, but reuse the same browser
+        context = await browser.new_context()
+        page = await context.new_page()
 
-            found_urls = set()
-            def handle_request(request_obj):
-                url = request_obj.url
-                if '.m3u8' in url or '.mpd' in url:
-                    found_urls.add(url)
+        found_urls = set()
+        def handle_request(request_obj):
+            url = request_obj.url
+            if '.m3u8' in url or '.mpd' in url:
+                found_urls.add(url)
 
-            page.on("request", handle_request)
+        page.on("request", handle_request)
 
-            await page.goto(embed_url, wait_until="networkidle", timeout=15000)
-            await asyncio.sleep(5)
+        await page.goto(embed_url, wait_until="networkidle", timeout=15000)
+        await asyncio.sleep(5)
 
-            if found_urls:
-                result['status'] = 'success'
-                result['urls'] = list(found_urls)
-            
-            await browser.close()
+        if found_urls:
+            result['status'] = 'success'
+            result['urls'] = list(found_urls)
+        
+        # Cleanup the context/page, but keep the main browser open
+        await context.close()
 
     except Exception as e:
         result['status'] = 'error'
@@ -65,16 +60,31 @@ async def scrape_embed_url_async(tmdb_id, tag):
         
     return result
 
-# --- NEW: Asynchronous Handler Function ---
+# --- Asynchronous Handler Function ---
 async def async_handler(tmdb_id):
-    # Create a list of all scraping tasks
-    tasks = [
-        scrape_embed_url_async(tmdb_id, tag)
-        for tag in TAGS
-    ]
+    playwright_instance = await async_playwright().start()
+    browser = None
+    try:
+        # 1. Launch the browser ONCE for the entire function execution
+        browser = await playwright_instance.chromium.launch(
+            headless=True,
+            args=['--no-sandbox', '--disable-setuid-sandbox', '--single-process']
+        )
+        
+        # 2. Create the tasks, passing the shared browser instance
+        tasks = [
+            scrape_embed_url_async(browser, tmdb_id, tag)
+            for tag in TAGS
+        ]
 
-    # Run all tasks concurrently using one efficient event loop
-    return await asyncio.gather(*tasks)
+        # 3. Run all tasks concurrently
+        return await asyncio.gather(*tasks)
+    
+    finally:
+        # 4. Ensure the browser and Playwright instance are closed cleanly
+        if browser:
+            await browser.close()
+        await playwright_instance.stop()
 
 # --- Flask Endpoint (MODIFIED) ---
 @app.route('/', defaults={'path': ''})
@@ -85,13 +95,14 @@ def handler(path):
     tmdb_id = request.args.get('id')
     
     if not tmdb_id:
+        # This will now correctly return the base HTML due to vercel.json routes
         return "<h1>TMDB Scraper is running.</h1><p>Please use /api?id=[TMDB_ID_HERE] to start scraping.</p>"
 
     try:
-        # We now run the entire concurrent scraping process synchronously using asyncio.run
-        # This is efficient because it uses a single thread/loop.
+        # Execute the entire concurrent process
         raw_results = asyncio.run(async_handler(tmdb_id))
         
+        # ... (result aggregation remains the same) ...
         results = {}
         total_urls_found = 0
         
@@ -114,6 +125,7 @@ def handler(path):
         return jsonify(response_data)
 
     except Exception as e:
+        # Handle general errors gracefully
         return jsonify({
             'error': 'An internal server error occurred during scraping.',
             'details': str(e)
